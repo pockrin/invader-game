@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Invader-like Shooter</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #000; color: #0f0; font-family: monospace; }
+    #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px; }
+    canvas { background: #111; border: 1px solid #0f0; image-rendering: pixelated; }
+    .hud { width: 640px; display: flex; justify-content: space-between; }
+    .btn { color:#0f0; border:1px solid #0f0; background:transparent; padding:4px 8px; cursor:pointer; }
+    .btn:hover { background:#033; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hud">
+    <div id="score">SCORE: 0</div>
+    <div id="lives">LIVES: 3</div>
+  </div>
+  <canvas id="game" width="640" height="480"></canvas>
+  <div class="hud">
+    <div>← → : Move / Space : Shoot</div>
+    <button id="restart" class="btn">Restart</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const restartBtn = document.getElementById('restart');
+
+  const W = canvas.width, H = canvas.height;
+
+  // Game state
+  let state;
+  const KEY = { left: false, right: false, shoot: false };
+  let lastShotTime = 0;
+
+  const PLAYER = {
+    width: 28,
+    height: 16,
+    speed: 220,
+    color: '#0f0',
+    cooldownMs: 280
+  };
+  const BULLET = { width: 3, height: 10, speed: 420, color: '#ff6' };
+  const ENEMY = {
+    rows: 5,
+    cols: 10,
+    width: 22,
+    height: 14,
+    hGap: 18,
+    vGap: 18,
+    startX: 70,
+    startY: 60,
+    color: '#f55',
+    baseSpeed: 30,      // base horizontal speed
+    stepDown: 18,       // down step on edge hit
+    speedGrowth: 1.04,  // speed grows as enemies die
+    shootRate: 0.8,     // bullets/sec across all enemies
+    bulletSpeed: 200,
+    bulletColor: '#f88',
+    bulletW: 3,
+    bulletH: 10
+  };
+  const EFFECT = { color: '#8ff', ttl: 250 };
+
+  function init() {
+    state = {
+      running: true,
+      score: 0,
+      lives: 3,
+      player: { x: W/2 - PLAYER.width/2, y: H - 60, vx: 0 },
+      bullets: [],
+      enemies: [],
+      eDir: 1,           // 1:right, -1:left
+      eSpeed: ENEMY.baseSpeed,
+      eBullets: [],
+      effects: [],
+      lastTime: performance.now(),
+      over: false
+    };
+    // build enemy grid
+    for (let r = 0; r < ENEMY.rows; r++) {
+      for (let c = 0; c < ENEMY.cols; c++) {
+        const x = ENEMY.startX + c * (ENEMY.width + ENEMY.hGap);
+        const y = ENEMY.startY + r * (ENEMY.height + ENEMY.vGap);
+        state.enemies.push({ x, y, alive: true });
+      }
+    }
+  }
+
+  // Input
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'ArrowLeft') KEY.left = true;
+    if (e.code === 'ArrowRight') KEY.right = true;
+    if (e.code === 'Space') KEY.shoot = true;
+    if (e.code === 'Enter' && state.over) init();
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'ArrowLeft') KEY.left = false;
+    if (e.code === 'ArrowRight') KEY.right = false;
+    if (e.code === 'Space') KEY.shoot = false;
+  });
+  restartBtn.addEventListener('click', () => init());
+
+  // Helpers
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function rectHit(ax, ay, aw, ah, bx, by, bw, bh) {
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+  function addEffect(x, y) {
+    state.effects.push({ x, y, t0: performance.now() });
+  }
+  function drawShip(x, y, w, h, color) {
+    ctx.fillStyle = color;
+    // simple retro ship
+    ctx.fillRect(x, y + h*0.6, w, h*0.4);
+    ctx.fillRect(x + w*0.15, y + h*0.3, w*0.7, h*0.3);
+    ctx.fillRect(x + w*0.35, y, w*0.3, h*0.3);
+  }
+  function drawInvader(x, y, w, h, color, t) {
+    ctx.fillStyle = color;
+    const jiggle = Math.sin(t*8 + (x+y)*0.02) * 1.5;
+    const yy = y + jiggle;
+    ctx.fillRect(x, yy + h*0.6, w, h*0.4);
+    ctx.fillRect(x + w*0.1, yy + h*0.3, w*0.8, h*0.25);
+    ctx.fillRect(x + w*0.25, yy, w*0.5, h*0.3);
+  }
+
+  function update(dt) {
+    if (state.over) return;
+
+    // Player movement
+    state.player.vx = (KEY.left ? -1 : 0) + (KEY.right ? 1 : 0);
+    state.player.x += state.player.vx * PLAYER.speed * dt;
+    state.player.x = clamp(state.player.x, 8, W - PLAYER.width - 8);
+
+    // Shooting
+    const now = performance.now();
+    if (KEY.shoot && now - lastShotTime > PLAYER.cooldownMs) {
+      state.bullets.push({
+        x: state.player.x + PLAYER.width/2 - BULLET.width/2,
+        y: state.player.y - BULLET.height,
+      });
+      lastShotTime = now;
+    }
+
+    // Bullets update
+    for (const b of state.bullets) b.y -= BULLET.speed * dt;
+    state.bullets = state.bullets.filter(b => b.y + BULLET.height > 0);
+
+    // Enemy movement (edge detect)
+    let minX = Infinity, maxX = -Infinity;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      minX = Math.min(minX, e.x);
+      maxX = Math.max(maxX, e.x + ENEMY.width);
+    }
+    let hitEdge = false;
+    if (minX === Infinity) hitEdge = false; // none alive
+    else {
+      const speed = state.eSpeed * state.eDir;
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        e.x += speed * dt;
+      }
+      if (minX <= 8 && state.eDir < 0) hitEdge = true;
+      if (maxX >= W - 8 && state.eDir > 0) hitEdge = true;
+    }
+    if (hitEdge) {
+      state.eDir *= -1;
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        e.y += ENEMY.stepDown;
+        if (e.y + ENEMY.height >= state.player.y) gameOver();
+      }
+    }
+
+    // Enemy shooting
+    if (Math.random() < ENEMY.shootRate * dt) {
+      // choose a random column's lowest alive enemy
+      const columns = {};
+      state.enemies.forEach((e, i) => {
+        if (!e.alive) return;
+        const col = Math.round((e.x - ENEMY.startX) / (ENEMY.width + ENEMY.hGap));
+        if (!columns[col] || columns[col].y < e.y) columns[col] = e;
+      });
+      const keys = Object.keys(columns);
+      if (keys.length) {
+        const pick = columns[keys[(Math.random()*keys.length)|0]];
+        state.eBullets.push({
+          x: pick.x + ENEMY.width/2 - ENEMY.bulletW/2,
+          y: pick.y + ENEMY.height
+        });
+      }
+    }
+    for (const eb of state.eBullets) eb.y += ENEMY.bulletSpeed * dt;
+    state.eBullets = state.eBullets.filter(eb => eb.y < H + 20);
+
+    // Collisions: player bullet vs enemy
+    for (const b of state.bullets) {
+      for (const e of state.enemies) {
+        if (!e.alive) continue;
+        if (rectHit(b.x, b.y, BULLET.width, BULLET.height, e.x, e.y, ENEMY.width, ENEMY.height)) {
+          e.alive = false;
+          b.y = -9999; // mark for removal
+          state.score += 10;
+          addEffect(e.x + ENEMY.width/2, e.y + ENEMY.height/2);
+          // speed up as enemies die
+          state.eSpeed *= ENEMY.speedGrowth;
+        }
+      }
+    }
+    state.bullets = state.bullets.filter(b => b.y > -100);
+
+    // Collision: enemy bullet vs player
+    for (const eb of state.eBullets) {
+      if (rectHit(eb.x, eb.y, ENEMY.bulletW, ENEMY.bulletH, state.player.x, state.player.y, PLAYER.width, PLAYER.height)) {
+        eb.y = H + 999; // remove
+        hitPlayer();
+      }
+    }
+
+    // Victory
+    if (!state.enemies.some(e => e.alive)) {
+      // Next wave
+      state.score += 100;
+      nextWave();
+    }
+  }
+
+  function hitPlayer() {
+    state.lives -= 1;
+    livesEl.textContent = 'LIVES: ' + state.lives;
+    addEffect(state.player.x + PLAYER.width/2, state.player.y);
+    if (state.lives <= 0) {
+      gameOver();
+    } else {
+      // brief invulnerability or reposition
+      state.player.x = W/2 - PLAYER.width/2;
+    }
+  }
+
+  function nextWave() {
+    // respawn enemies harder
+    state.eSpeed = ENEMY.baseSpeed * 1.1;
+    state.enemies.forEach((e, i) => {
+      e.alive = true;
+      const r = Math.floor(i / ENEMY.cols);
+      const c = i % ENEMY.cols;
+      e.x = ENEMY.startX + c * (ENEMY.width + ENEMY.hGap);
+      e.y = ENEMY.startY + r * (ENEMY.height + ENEMY.vGap);
+    });
+  }
+
+  function gameOver() {
+    state.over = true;
+    state.running = false;
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, W, H);
+
+    // stars background
+    ctx.fillStyle = '#222';
+    for (let i = 0; i < 60; i++) {
+      const x = (i*53 % W), y = (i*97 + (t*30|0)) % H;
+      ctx.fillRect(x, y, 2, 2);
+    }
+
+    // player
+    drawShip(state.player.x, state.player.y, PLAYER.width, PLAYER.height, PLAYER.color);
+
+    // bullets
+    ctx.fillStyle = BULLET.color;
+    for (const b of state.bullets) ctx.fillRect(b.x, b.y, BULLET.width, BULLET.height);
+
+    // enemies
+    const time = t / 1000;
+    for (const e of state.enemies) {
+      if (!e.alive) continue;
+      drawInvader(e.x, e.y, ENEMY.width, ENEMY.height, ENEMY.color, time);
+    }
+
+    // enemy bullets
+    ctx.fillStyle = ENEMY.bulletColor;
+    for (const eb of state.eBullets) ctx.fillRect(eb.x, eb.y, ENEMY.bulletW, ENEMY.bulletH);
+
+    // effects
+    const now = performance.now();
+    state.effects = state.effects.filter(fx => now - fx.t0 < EFFECT.ttl);
+    for (const fx of state.effects) {
+      const p = (now - fx.t0) / EFFECT.ttl;
+      ctx.strokeStyle = EFFECT.color;
+      ctx.globalAlpha = 1 - p;
+      ctx.beginPath();
+      ctx.arc(fx.x, fx.y, 6 + 26*p, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // HUD
+    scoreEl.textContent = 'SCORE: ' + state.score;
+
+    // game over banner
+    if (state.over) {
+      ctx.fillStyle = '#0f0';
+      ctx.textAlign = 'center';
+      ctx.font = '24px monospace';
+      ctx.fillText('GAME OVER - Press Enter or Restart', W/2, H/2);
+    }
+  }
+
+  function loop(ts) {
+    const dt = Math.min(0.033, (ts - state.lastTime) / 1000);
+    state.lastTime = ts;
+    update(dt);
+    draw(ts);
+    requestAnimationFrame(loop);
+  }
+
+  init();
+  requestAnimationFrame((t) => { state.lastTime = t; loop(t); });
+})();
+</script>
+<style>
+  .touchbar { width: 640px; display:flex; justify-content:space-between; gap:8px; }
+  .tbtn { flex:1; padding:14px 0; border:1px solid #0f0; color:#0f0; background:#022; touch-action: manipulation; }
+  .tbtn:active { background:#044; }
+</style>
+<div class="touchbar">
+  <button id="btnLeft"  class="tbtn">◀︎ LEFT</button>
+  <button id="btnShoot" class="tbtn">● SHOOT</button>
+  <button id="btnRight" class="tbtn">RIGHT ▶︎</button>
+</div>
+<script>
+  // 既存のKEYオブジェクトを使う前提（KEY.left/right/shoot）
+  const leftBtn  = document.getElementById('btnLeft');
+  const rightBtn = document.getElementById('btnRight');
+  const shootBtn = document.getElementById('btnShoot');
+
+  function bindHold(btn, on, off) {
+    const start = (e) => { e.preventDefault(); on(); };
+    const end   = (e) => { e.preventDefault(); off(); };
+    btn.addEventListener('touchstart', start, {passive:false});
+    btn.addEventListener('touchend',   end,   {passive:false});
+    btn.addEventListener('touchcancel',end,   {passive:false});
+    btn.addEventListener('mousedown',  start);
+    window.addEventListener('mouseup', end);
+    // 連打しやすいようにクリックでもトグルしないようhold型に
+  }
+  bindHold(leftBtn,  () => KEY.left = true,  () => KEY.left  = false);
+  bindHold(rightBtn, () => KEY.right = true, () => KEY.right = false);
+  bindHold(shootBtn, () => KEY.shoot = true, () => KEY.shoot = false);
+</script>
+</body>
+</html>
