@@ -329,35 +329,6 @@
   requestAnimationFrame((t) => { state.lastTime = t; loop(t); });
 })();
 </script>
-<style>
-  .touchbar { width: 640px; display:flex; justify-content:space-between; gap:8px; }
-  .tbtn { flex:1; padding:14px 0; border:1px solid #0f0; color:#0f0; background:#022; touch-action: manipulation; }
-  .tbtn:active { background:#044; }
-</style>
-<div class="touchbar">
-  <button id="btnLeft"  class="tbtn">◀︎ LEFT</button>
-  <button id="btnShoot" class="tbtn">● SHOOT</button>
-  <button id="btnRight" class="tbtn">RIGHT ▶︎</button>
-</div>
-<script>
-  // 既存のKEYオブジェクトを使う前提（KEY.left/right/shoot）
-  const leftBtn  = document.getElementById('btnLeft');
-  const rightBtn = document.getElementById('btnRight');
-  const shootBtn = document.getElementById('btnShoot');
-
-  function bindHold(btn, on, off) {
-    const start = (e) => { e.preventDefault(); on(); };
-    const end   = (e) => { e.preventDefault(); off(); };
-    btn.addEventListener('touchstart', start, {passive:false});
-    btn.addEventListener('touchend',   end,   {passive:false});
-    btn.addEventListener('touchcancel',end,   {passive:false});
-    btn.addEventListener('mousedown',  start);
-    window.addEventListener('mouseup', end);
-    // 連打しやすいようにクリックでもトグルしないようhold型に
-  }
-  bindHold(leftBtn,  () => KEY.left = true,  () => KEY.left  = false);
-  bindHold(rightBtn, () => KEY.right = true, () => KEY.right = false);
-  bindHold(shootBtn, () => KEY.shoot = true, () => KEY.shoot = false);
 </script>
 </body>
 </html>
