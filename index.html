@@ -2,333 +2,492 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Invader-like Shooter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Invader - Elegant Palette</title>
   <style>
-    html, body { margin: 0; padding: 0; background: #000; color: #0f0; font-family: monospace; }
-    #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px; }
-    canvas { background: #111; border: 1px solid #0f0; image-rendering: pixelated; }
-    .hud { width: 640px; display: flex; justify-content: space-between; }
-    .btn { color:#0f0; border:1px solid #0f0; background:transparent; padding:4px 8px; cursor:pointer; }
-    .btn:hover { background:#033; }
+    :root{
+      --bg:#0F1217;
+      --bg2:#0B0E13;
+      --player:#E2E8F0;
+      --enemy:#7DD3FC;
+      --enemy-strong:#A78BFA;
+      --bullet-player:#FDE68A;
+      --bullet-enemy:#FCA5A5;
+      --text:#CBD5E1;
+      --flash:#F472B6;
+      --panel:#1F2937;
+      --panel-border:#334155;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .wrap {
+      display: grid;
+      place-items: center;
+      height: 100%;
+      gap: 12px;
+    }
+    canvas {
+      display: block;
+      background: transparent;
+      image-rendering: pixelated; /* レトロ感を保ちつつシャープに */
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      border-radius: 10px;
+    }
+    .panel {
+      display: flex; gap: 10px; align-items: center; justify-content: center;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 10px;
+      padding: 8px 14px;
+      color: #E5E7EB;
+      font-size: 14px;
+    }
+    .kbd {
+      padding: 2px 6px;
+      border: 1px solid #64748B;
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      background: #0B1220;
+      color: #D1D5DB;
+      font-variant-numeric: tabular-nums;
+    }
+    a { color: #93C5FD; text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-<div id="wrap">
-  <div class="hud">
-    <div id="score">SCORE: 0</div>
-    <div id="lives">LIVES: 3</div>
+  <div class="wrap">
+    <canvas id="game" width="640" height="480" aria-label="Invader Game"></canvas>
+    <div class="panel">
+      <span>← → 移動</span>
+      <span class="kbd">Space</span><span>射撃</span>
+      <span class="kbd">R</span><span>リスタート</span>
+    </div>
   </div>
-  <canvas id="game" width="640" height="480"></canvas>
-  <div class="hud">
-    <div>← → : Move / Space : Shoot</div>
-    <button id="restart" class="btn">Restart</button>
-  </div>
-</div>
 
-<script>
-(() => {
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
-  const scoreEl = document.getElementById('score');
-  const livesEl = document.getElementById('lives');
-  const restartBtn = document.getElementById('restart');
+  <script>
+    // 配色
+    const Colors = {
+      bg: getCssVar('--bg'),
+      bg2: getCssVar('--bg2'),
+      player: getCssVar('--player'),
+      enemy: getCssVar('--enemy'),
+      enemyStrong: getCssVar('--enemy-strong'),
+      bulletPlayer: getCssVar('--bullet-player'),
+      bulletEnemy: getCssVar('--bullet-enemy'),
+      text: getCssVar('--text'),
+      flash: getCssVar('--flash')
+    };
+    function getCssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
-  const W = canvas.width, H = canvas.height;
+    // 基本セットアップ
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
 
-  // Game state
-  let state;
-  const KEY = { left: false, right: false, shoot: false };
-  let lastShotTime = 0;
+    const W = canvas.width;
+    const H = canvas.height;
 
-  const PLAYER = {
-    width: 28,
-    height: 16,
-    speed: 220,
-    color: '#0f0',
-    cooldownMs: 280
-  };
-  const BULLET = { width: 3, height: 10, speed: 420, color: '#ff6' };
-  const ENEMY = {
-    rows: 5,
-    cols: 10,
-    width: 22,
-    height: 14,
-    hGap: 18,
-    vGap: 18,
-    startX: 70,
-    startY: 60,
-    color: '#f55',
-    baseSpeed: 30,      // base horizontal speed
-    stepDown: 18,       // down step on edge hit
-    speedGrowth: 1.04,  // speed grows as enemies die
-    shootRate: 0.8,     // bullets/sec across all enemies
-    bulletSpeed: 200,
-    bulletColor: '#f88',
-    bulletW: 3,
-    bulletH: 10
-  };
-  const EFFECT = { color: '#8ff', ttl: 250 };
+    // 入力状態
+    const Keys = { left:false, right:false, fire:false, restart:false };
+    window.addEventListener('keydown', (e)=>{
+      if (e.code === 'ArrowLeft') Keys.left = true;
+      if (e.code === 'ArrowRight') Keys.right = true;
+      if (e.code === 'Space') Keys.fire = true;
+      if (e.code === 'KeyR') Keys.restart = true;
+    });
+    window.addEventListener('keyup', (e)=>{
+      if (e.code === 'ArrowLeft') Keys.left = false;
+      if (e.code === 'ArrowRight') Keys.right = false;
+      if (e.code === 'Space') Keys.fire = false;
+      if (e.code === 'KeyR') Keys.restart = false;
+    });
 
-  function init() {
-    state = {
-      running: true,
+    // 乱数ヘルパ
+    const rand = (a,b)=> a + Math.random()*(b-a);
+
+    // ゲーム状態
+    const state = {
+      scene: 'title', // 'title' | 'play' | 'gameover' | 'clear'
       score: 0,
       lives: 3,
-      player: { x: W/2 - PLAYER.width/2, y: H - 60, vx: 0 },
-      bullets: [],
-      enemies: [],
-      eDir: 1,           // 1:right, -1:left
-      eSpeed: ENEMY.baseSpeed,
-      eBullets: [],
-      effects: [],
-      lastTime: performance.now(),
-      over: false
+      wave: 1,
+      flashTimer: 0,
+      lastFireTime: 0,
+      fireCooldown: 220, // ms
+      shake: 0
     };
-    // build enemy grid
-    for (let r = 0; r < ENEMY.rows; r++) {
-      for (let c = 0; c < ENEMY.cols; c++) {
-        const x = ENEMY.startX + c * (ENEMY.width + ENEMY.hGap);
-        const y = ENEMY.startY + r * (ENEMY.height + ENEMY.vGap);
-        state.enemies.push({ x, y, alive: true });
-      }
-    }
-  }
 
-  // Input
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'ArrowLeft') KEY.left = true;
-    if (e.code === 'ArrowRight') KEY.right = true;
-    if (e.code === 'Space') KEY.shoot = true;
-    if (e.code === 'Enter' && state.over) init();
-  });
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'ArrowLeft') KEY.left = false;
-    if (e.code === 'ArrowRight') KEY.right = false;
-    if (e.code === 'Space') KEY.shoot = false;
-  });
-  restartBtn.addEventListener('click', () => init());
+    // プレイヤー
+    const player = {
+      x: W/2, y: H-50, w: 36, h: 12, speed: 220,
+      alive: true, hitTimer: 0
+    };
 
-  // Helpers
-  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-  function rectHit(ax, ay, aw, ah, bx, by, bw, bh) {
-    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
-  }
-  function addEffect(x, y) {
-    state.effects.push({ x, y, t0: performance.now() });
-  }
-  function drawShip(x, y, w, h, color) {
-    ctx.fillStyle = color;
-    // simple retro ship
-    ctx.fillRect(x, y + h*0.6, w, h*0.4);
-    ctx.fillRect(x + w*0.15, y + h*0.3, w*0.7, h*0.3);
-    ctx.fillRect(x + w*0.35, y, w*0.3, h*0.3);
-  }
-  function drawInvader(x, y, w, h, color, t) {
-    ctx.fillStyle = color;
-    const jiggle = Math.sin(t*8 + (x+y)*0.02) * 1.5;
-    const yy = y + jiggle;
-    ctx.fillRect(x, yy + h*0.6, w, h*0.4);
-    ctx.fillRect(x + w*0.1, yy + h*0.3, w*0.8, h*0.25);
-    ctx.fillRect(x + w*0.25, yy, w*0.5, h*0.3);
-  }
+    // 弾
+    const bullets = []; // {x,y,r,vy,from:'player'|'enemy'}
+    // 敵
+    let enemies = [];   // {x,y,w,h,alive,strong,dx}
+    // 爆発パーティクル
+    const sparks = [];  // {x,y,dx,dy,life,color}
 
-  function update(dt) {
-    if (state.over) return;
-
-    // Player movement
-    state.player.vx = (KEY.left ? -1 : 0) + (KEY.right ? 1 : 0);
-    state.player.x += state.player.vx * PLAYER.speed * dt;
-    state.player.x = clamp(state.player.x, 8, W - PLAYER.width - 8);
-
-    // Shooting
-    const now = performance.now();
-    if (KEY.shoot && now - lastShotTime > PLAYER.cooldownMs) {
-      state.bullets.push({
-        x: state.player.x + PLAYER.width/2 - BULLET.width/2,
-        y: state.player.y - BULLET.height,
-      });
-      lastShotTime = now;
+    // 初期化
+    function resetGame(){
+      state.scene = 'title';
+      state.score = 0;
+      state.lives = 3;
+      state.wave = 1;
+      player.x = W/2; player.y = H-50; player.alive = true;
+      bullets.length = 0;
+      sparks.length = 0;
+      spawnEnemies(state.wave);
     }
 
-    // Bullets update
-    for (const b of state.bullets) b.y -= BULLET.speed * dt;
-    state.bullets = state.bullets.filter(b => b.y + BULLET.height > 0);
-
-    // Enemy movement (edge detect)
-    let minX = Infinity, maxX = -Infinity;
-    for (const e of state.enemies) {
-      if (!e.alive) continue;
-      minX = Math.min(minX, e.x);
-      maxX = Math.max(maxX, e.x + ENEMY.width);
-    }
-    let hitEdge = false;
-    if (minX === Infinity) hitEdge = false; // none alive
-    else {
-      const speed = state.eSpeed * state.eDir;
-      for (const e of state.enemies) {
-        if (!e.alive) continue;
-        e.x += speed * dt;
-      }
-      if (minX <= 8 && state.eDir < 0) hitEdge = true;
-      if (maxX >= W - 8 && state.eDir > 0) hitEdge = true;
-    }
-    if (hitEdge) {
-      state.eDir *= -1;
-      for (const e of state.enemies) {
-        if (!e.alive) continue;
-        e.y += ENEMY.stepDown;
-        if (e.y + ENEMY.height >= state.player.y) gameOver();
-      }
-    }
-
-    // Enemy shooting
-    if (Math.random() < ENEMY.shootRate * dt) {
-      // choose a random column's lowest alive enemy
-      const columns = {};
-      state.enemies.forEach((e, i) => {
-        if (!e.alive) return;
-        const col = Math.round((e.x - ENEMY.startX) / (ENEMY.width + ENEMY.hGap));
-        if (!columns[col] || columns[col].y < e.y) columns[col] = e;
-      });
-      const keys = Object.keys(columns);
-      if (keys.length) {
-        const pick = columns[keys[(Math.random()*keys.length)|0]];
-        state.eBullets.push({
-          x: pick.x + ENEMY.width/2 - ENEMY.bulletW/2,
-          y: pick.y + ENEMY.height
-        });
-      }
-    }
-    for (const eb of state.eBullets) eb.y += ENEMY.bulletSpeed * dt;
-    state.eBullets = state.eBullets.filter(eb => eb.y < H + 20);
-
-    // Collisions: player bullet vs enemy
-    for (const b of state.bullets) {
-      for (const e of state.enemies) {
-        if (!e.alive) continue;
-        if (rectHit(b.x, b.y, BULLET.width, BULLET.height, e.x, e.y, ENEMY.width, ENEMY.height)) {
-          e.alive = false;
-          b.y = -9999; // mark for removal
-          state.score += 10;
-          addEffect(e.x + ENEMY.width/2, e.y + ENEMY.height/2);
-          // speed up as enemies die
-          state.eSpeed *= ENEMY.speedGrowth;
+    function spawnEnemies(wave){
+      enemies = [];
+      const rows = 5, cols = 10;
+      const cellW = 48, cellH = 32;
+      const startX = (W - (cols-1)*cellW)/2 - 16;
+      const startY = 80;
+      for (let r=0; r<rows; r++){
+        for (let c=0; c<cols; c++){
+          const strong = (r < 2) || (Math.random() < 0.1*wave);
+          enemies.push({
+            x: startX + c*cellW,
+            y: startY + r*cellH,
+            w: 26, h: 16,
+            alive: true,
+            strong,
+            dx: 40 + wave*5
+          });
         }
       }
     }
-    state.bullets = state.bullets.filter(b => b.y > -100);
 
-    // Collision: enemy bullet vs player
-    for (const eb of state.eBullets) {
-      if (rectHit(eb.x, eb.y, ENEMY.bulletW, ENEMY.bulletH, state.player.x, state.player.y, PLAYER.width, PLAYER.height)) {
-        eb.y = H + 999; // remove
-        hitPlayer();
+    // 背景
+    function drawBackground(){
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0, Colors.bg);
+      g.addColorStop(1, Colors.bg2);
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+      // 微細ノイズ
+      ctx.save();
+      ctx.globalAlpha = 0.05;
+      ctx.fillStyle = '#FFFFFF';
+      for (let i=0;i<50;i++){
+        const x = Math.random()*W, y = Math.random()*H, s = Math.random()*2;
+        ctx.fillRect(x, y, s, s);
+      }
+      ctx.restore();
+    }
+
+    // プレイヤー描画
+    function drawPlayer(){
+      ctx.save();
+      if (player.hitTimer > 0){
+        ctx.globalAlpha = 0.6 + 0.4*Math.sin(Date.now()*0.04);
+        ctx.fillStyle = Colors.flash;
+      } else {
+        ctx.fillStyle = Colors.player;
+      }
+      roundRect(ctx, player.x-player.w/2, player.y-player.h/2, player.w, player.h, 3, true);
+      // ライトグロー
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = Colors.player;
+      roundRect(ctx, player.x-player.w/2, player.y-player.h/2-4, player.w, player.h, 6, true);
+      ctx.restore();
+    }
+
+    // 敵描画
+    function drawEnemy(e){
+      ctx.save();
+      ctx.fillStyle = e.strong ? Colors.enemyStrong : Colors.enemy;
+      const t = Date.now()*0.005;
+      const pulse = 0.8 + 0.2*Math.sin(t + (e.x+e.y)*0.01);
+      ctx.globalAlpha = pulse;
+      roundRect(ctx, e.x-e.w/2, e.y-e.h/2, e.w, e.h, 3, true);
+      ctx.restore();
+    }
+
+    // 弾描画
+    function drawBullet(b){
+      ctx.save();
+      ctx.fillStyle = b.from === 'player' ? Colors.bulletPlayer : Colors.bulletEnemy;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+      // 外側グロー
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r+3, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // UI
+    function drawUI(){
+      ctx.save();
+      ctx.fillStyle = Colors.text;
+      ctx.font = '16px Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+      ctx.fillText(`SCORE ${state.score}`, 12, 24);
+      ctx.fillText(`LIVES ${state.lives}`, 120, 24);
+      ctx.fillText(`WAVE ${state.wave}`, 220, 24);
+      ctx.restore();
+    }
+
+    // タイトル/メッセージ
+    function drawCenteredMessage(title, subtitle){
+      ctx.save();
+      ctx.fillStyle = Colors.text;
+      ctx.textAlign = 'center';
+      ctx.font = '700 28px Inter, ui-sans-serif, system-ui';
+      ctx.fillText(title, W/2, H/2 - 10);
+      ctx.font = '14px Inter, ui-sans-serif, system-ui';
+      ctx.fillText(subtitle, W/2, H/2 + 18);
+      ctx.restore();
+    }
+
+    // 角丸矩形
+    function roundRect(ctx, x, y, w, h, r, fill=true, stroke=false){
+      const rr = Math.min(r, w/2, h/2);
+      ctx.beginPath();
+      ctx.moveTo(x+rr, y);
+      ctx.arcTo(x+w, y, x+w, y+h, rr);
+      ctx.arcTo(x+w, y+h, x, y+h, rr);
+      ctx.arcTo(x, y+h, x, y, rr);
+      ctx.arcTo(x, y, x+w, y, rr);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+
+    // 爆発スパーク
+    function addExplosion(x,y,color){
+      for (let i=0;i<16;i++){
+        sparks.push({
+          x, y,
+          dx: rand(-80,80),
+          dy: rand(-120, -20),
+          life: rand(0.25, 0.7),
+          color
+        });
+      }
+      state.shake = Math.max(state.shake, 6);
+    }
+
+    function updateSparks(dt){
+      for (let i=sparks.length-1;i>=0;i--){
+        const s = sparks[i];
+        s.life -= dt;
+        if (s.life <= 0){ sparks.splice(i,1); continue; }
+        s.x += s.dx * dt;
+        s.y += s.dy * dt;
+        s.dy += 200*dt; // gravity
+      }
+    }
+    function drawSparks(){
+      ctx.save();
+      for (const s of sparks){
+        ctx.globalAlpha = Math.max(0, s.life);
+        ctx.fillStyle = s.color;
+        ctx.fillRect(s.x, s.y, 2, 2);
+      }
+      ctx.restore();
+    }
+
+    // 当たり判定
+    function aabb(ax,ay,aw,ah, bx,by,bw,bh){
+      return (Math.abs(ax-bx) * 2 < (aw + bw)) && (Math.abs(ay-by) * 2 < (ah + bh));
+    }
+
+    // ゲーム更新
+    let lastTime = performance.now();
+    resetGame();
+
+    function gameLoop(now){
+      const dt = Math.min(0.033, (now - lastTime)/1000);
+      lastTime = now;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+
+    function update(dt){
+      if (state.scene === 'title'){
+        if (Keys.fire || Keys.left || Keys.right){
+          state.scene = 'play';
+        }
+      } else if (state.scene === 'play'){
+        // プレイヤー移動
+        const dir = (Keys.right?1:0) - (Keys.left?1:0);
+        player.x += dir * player.speed * dt;
+        player.x = Math.max(24, Math.min(W-24, player.x));
+
+        // 射撃
+        if (Keys.fire && (nowMs() - state.lastFireTime >= state.fireCooldown)){
+          bullets.push({ x: player.x, y: player.y-10, r: 3, vy: -360, from: 'player' });
+          state.lastFireTime = nowMs();
+        }
+
+        // 敵の移動と射撃
+        let edgeHit = false;
+        for (const e of enemies){
+          if (!e.alive) continue;
+          e.x += e.dx * dt;
+          if (e.x < 24 || e.x > W-24){ edgeHit = true; }
+          // 敵射撃（低確率、下の列ほど発射）
+          if (Math.random() < 0.0025){
+            bullets.push({ x: e.x, y: e.y+12, r: 3, vy: 140 + Math.random()*60, from: 'enemy' });
+          }
+          // 侵攻しすぎたらゲームオーバー
+          if (e.y > H-100){
+            state.scene = 'gameover';
+          }
+        }
+        if (edgeHit){
+          for (const e of enemies){
+            e.dx *= -1;
+            e.y += 10;
+          }
+        }
+
+        // 弾更新
+        for (let i=bullets.length-1;i>=0;i--){
+          const b = bullets[i];
+          b.y += b.vy * dt;
+          if (b.y < -10 || b.y > H+10){
+            bullets.splice(i,1); continue;
+          }
+        }
+
+        // 衝突: プレイヤー弾 vs 敵
+        for (let i=bullets.length-1;i>=0;i--){
+          const b = bullets[i];
+          if (b.from !== 'player') continue;
+          for (const e of enemies){
+            if (!e.alive) continue;
+            if (Math.abs(b.x - e.x) < e.w/2 + b.r && Math.abs(b.y - e.y) < e.h/2 + b.r){
+              e.alive = false;
+              bullets.splice(i,1);
+              const col = e.strong ? Colors.enemyStrong : Colors.enemy;
+              addExplosion(e.x, e.y, col);
+              state.score += e.strong ? 150 : 100;
+              break;
+            }
+          }
+        }
+
+        // 衝突: 敵弾 vs プレイヤー
+        if (player.alive){
+          for (let i=bullets.length-1;i>=0;i--){
+            const b = bullets[i];
+            if (b.from !== 'enemy') continue;
+            if (Math.abs(b.x - player.x) < player.w/2 + b.r && Math.abs(b.y - player.y) < player.h/2 + b.r){
+              bullets.splice(i,1);
+              player.hitTimer = 0.4;
+              state.lives--;
+              addExplosion(player.x, player.y-6, Colors.flash);
+              if (state.lives <= 0){
+                state.scene = 'gameover';
+                player.alive = false;
+              }
+              break;
+            }
+          }
+        }
+
+        // 残敵チェック
+        if (enemies.every(e => !e.alive)){
+          state.wave++;
+          spawnEnemies(state.wave);
+          // クリア演出
+          state.scene = 'clear';
+          setTimeout(()=>{ state.scene = 'play'; }, 900);
+        }
+
+        // タイマー等
+        if (player.hitTimer > 0) player.hitTimer -= dt;
+        if (state.flashTimer > 0) state.flashTimer -= dt;
+
+        // 画面シェイク減衰
+        state.shake = Math.max(0, state.shake - 30*dt);
+
+        // パーティクル
+        updateSparks(dt);
+
+      } else if (state.scene === 'gameover'){
+        if (Keys.restart){
+          resetGame();
+          state.scene = 'play';
+        }
+      } else if (state.scene === 'clear'){
+        // 軽くスローモーション演出
+        updateSparks(dt);
       }
     }
 
-    // Victory
-    if (!state.enemies.some(e => e.alive)) {
-      // Next wave
-      state.score += 100;
-      nextWave();
-    }
-  }
+    function draw(){
+      // 画面揺れ
+      const sx = rand(-state.shake, state.shake);
+      const sy = rand(-state.shake, state.shake);
 
-  function hitPlayer() {
-    state.lives -= 1;
-    livesEl.textContent = 'LIVES: ' + state.lives;
-    addEffect(state.player.x + PLAYER.width/2, state.player.y);
-    if (state.lives <= 0) {
-      gameOver();
-    } else {
-      // brief invulnerability or reposition
-      state.player.x = W/2 - PLAYER.width/2;
-    }
-  }
+      drawBackground();
 
-  function nextWave() {
-    // respawn enemies harder
-    state.eSpeed = ENEMY.baseSpeed * 1.1;
-    state.enemies.forEach((e, i) => {
-      e.alive = true;
-      const r = Math.floor(i / ENEMY.cols);
-      const c = i % ENEMY.cols;
-      e.x = ENEMY.startX + c * (ENEMY.width + ENEMY.hGap);
-      e.y = ENEMY.startY + r * (ENEMY.height + ENEMY.vGap);
-    });
-  }
+      ctx.save();
+      ctx.translate(sx, sy);
 
-  function gameOver() {
-    state.over = true;
-    state.running = false;
-  }
+      if (state.scene === 'title'){
+        drawUI();
+        drawCenteredMessage('INVADER', 'Spaceで開始 / ← →で移動');
+        // タイトルでも編隊を見せる
+        for (const e of enemies){ if (e.alive) drawEnemy(e); }
+        drawPlayer();
+        drawSparks();
+      } else if (state.scene === 'play' || state.scene === 'clear'){
+        drawUI();
+        for (const e of enemies){ if (e.alive) drawEnemy(e); }
+        for (const b of bullets) drawBullet(b);
+        drawPlayer();
+        drawSparks();
 
-  function draw(t) {
-    ctx.clearRect(0, 0, W, H);
+        if (state.scene === 'clear'){
+          ctx.save();
+          ctx.globalAlpha = 0.85;
+          drawCenteredMessage('WAVE CLEAR', '次のウェーブに進みます');
+          ctx.restore();
+        }
+      } else if (state.scene === 'gameover'){
+        drawUI();
+        for (const e of enemies){ if (e.alive) drawEnemy(e); }
+        for (const b of bullets) drawBullet(b);
+        drawPlayer();
+        drawSparks();
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        drawCenteredMessage('GAME OVER', 'Rでリスタート');
+        ctx.restore();
+      }
 
-    // stars background
-    ctx.fillStyle = '#222';
-    for (let i = 0; i < 60; i++) {
-      const x = (i*53 % W), y = (i*97 + (t*30|0)) % H;
-      ctx.fillRect(x, y, 2, 2);
+      ctx.restore();
     }
 
-    // player
-    drawShip(state.player.x, state.player.y, PLAYER.width, PLAYER.height, PLAYER.color);
+    function nowMs(){ return performance.now(); }
 
-    // bullets
-    ctx.fillStyle = BULLET.color;
-    for (const b of state.bullets) ctx.fillRect(b.x, b.y, BULLET.width, BULLET.height);
-
-    // enemies
-    const time = t / 1000;
-    for (const e of state.enemies) {
-      if (!e.alive) continue;
-      drawInvader(e.x, e.y, ENEMY.width, ENEMY.height, ENEMY.color, time);
-    }
-
-    // enemy bullets
-    ctx.fillStyle = ENEMY.bulletColor;
-    for (const eb of state.eBullets) ctx.fillRect(eb.x, eb.y, ENEMY.bulletW, ENEMY.bulletH);
-
-    // effects
-    const now = performance.now();
-    state.effects = state.effects.filter(fx => now - fx.t0 < EFFECT.ttl);
-    for (const fx of state.effects) {
-      const p = (now - fx.t0) / EFFECT.ttl;
-      ctx.strokeStyle = EFFECT.color;
-      ctx.globalAlpha = 1 - p;
-      ctx.beginPath();
-      ctx.arc(fx.x, fx.y, 6 + 26*p, 0, Math.PI*2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
-    // HUD
-    scoreEl.textContent = 'SCORE: ' + state.score;
-
-    // game over banner
-    if (state.over) {
-      ctx.fillStyle = '#0f0';
-      ctx.textAlign = 'center';
-      ctx.font = '24px monospace';
-      ctx.fillText('GAME OVER - Press Enter or Restart', W/2, H/2);
-    }
-  }
-
-  function loop(ts) {
-    const dt = Math.min(0.033, (ts - state.lastTime) / 1000);
-    state.lastTime = ts;
-    update(dt);
-    draw(ts);
-    requestAnimationFrame(loop);
-  }
-
-  init();
-  requestAnimationFrame((t) => { state.lastTime = t; loop(t); });
-})();
-</script>
-</script>
+    // ===== 設定を変えたい場合 =====
+    // 1) 画面サイズ: <canvas> の width/height を変更し、プレイヤー初期Yや境界も合わせて調整
+    // 2) 弾の発射間隔: state.fireCooldown
+    // 3) 敵の列数/列幅: spawnEnemies内の rows, cols, cellW, cellH
+    // 4) パステル調を強めたい: CSSの --enemy, --enemy-strong, --bullet-* を淡い色に
+  </script>
 </body>
 </html>
